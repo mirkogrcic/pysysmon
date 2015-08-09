@@ -144,7 +144,7 @@ class Histograph():
         # endregion
 
         # region Vertex Shader, x increment
-        return #TODO continue x shader idea
+        return #TODO continue x shader idea, used to dynamically increase one x for every value, need this because of VBO usage(better than change the coords manually, performance)
         vshader = """void main()
 {
    gl_Position = gl_Vertex;
