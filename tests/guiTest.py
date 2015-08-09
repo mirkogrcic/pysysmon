@@ -10,7 +10,7 @@ from OpenGL.GLU import *
 from ctypes import *
 
 try:
-    import Testing.graph.OpenGL.histograph as h
+    import gui.histograph as h
 except:
     import histograph as h
 
@@ -40,6 +40,7 @@ def keyboard( key, x, y ):
         glutPostRedisplay()
     elif key == b"R":
         reshape(width, height)
+        hg.cache["scrollx"] = 0
         glLoadIdentity()
         glutPostRedisplay()
     elif key == b"+":

@@ -4,6 +4,7 @@ __author__ = 'mirko'
 
 import sys, os, ctypes as ct
 from time import clock, sleep
+from os import path
 
 import OpenGL
 from OpenGL.GL import *
@@ -48,6 +49,45 @@ def getVBOData(coords):
     except:
         data = (c_float*len(coords))(*coords)
         return data
+
+def getShaderProgram(vertex, fragment):
+    """
+
+    :param vertex: vertex source
+    :param fragment: fragment source
+    :return: glProgramObject, vertexShaderObject, fragmentShaderObject
+    """
+    gls_v = glCreateShader(GL_VERTEX_SHADER)
+    gls_f = glCreateShader(GL_FRAGMENT_SHADER)
+
+    glShaderSource(gls_v, [vertex])
+    glShaderSource(gls_f, [fragment])
+
+    # region Compile
+    glCompileShader(gls_v)
+    error = glGetShaderInfoLog(gls_v)
+    if error:
+        print(error.decode())
+        raise Exception("Error compiling vertex shader")
+
+    glCompileShader(gls_f)
+    error = glGetShaderInfoLog(gls_f)
+    if error:
+        print(error.decode())
+        raise Exception("Error compiling fragment shader")
+    # endregion
+
+    glp = glCreateProgram()
+    glAttachShader(glp, gls_v)
+    glAttachShader(glp, gls_f)
+
+    glLinkProgram(glp)
+    error = glGetProgramInfoLog(glp)
+    if error:
+        print(error.decode())
+        raise Exception("Error linking program")
+    return glp, gls_v, gls_f
+
 
 keys = {}
 def getKey(key):
@@ -119,6 +159,9 @@ class Histograph():
             "vao": None,
             "vbo_border": None,
 
+            "shaderProgram":None,
+            "shaderVarFill":None,
+
             "item_index": 0,
             "vertex_index": 0,
             "line_index":0,
@@ -144,51 +187,25 @@ class Histograph():
         # endregion
 
         # region Vertex Shader, x increment
-        return #TODO continue x shader idea, used to dynamically increase one x for every value, need this because of VBO usage(better than change the coords manually, performance)
-        vshader = """void main()
-{
-   gl_Position = gl_Vertex;
-}"""
-        fshader = """void main()
-{
-    gl_FragColor = gl_Color;
-}"""
-        gl_vshader = glCreateShader(GL_VERTEX_SHADER)
-        gl_fshader = glCreateShader(GL_FRAGMENT_SHADER)
+        path = os.path.dirname(__file__)
+        path = os.path.join(path, "shaders")
 
-        glShaderSource(gl_vshader, vshader)
-        glShaderSource(gl_fshader, fshader)
+        with open(os.path.join(path, "vertex.glsl")) as f:
+            vertex = f.read()
+        with open(os.path.join(path, "fragment.glsl")) as f:
+            fragment = f.read()
 
-        glCompileShader(gl_vshader)
-        glCompileShader(gl_fshader)
+        program = getShaderProgram(vertex, fragment)[0]
+        self.cache["shaderProgram"] = program
 
-        error = glGetShaderInfoLog(gl_vshader)
-        if error:
-            print(error.decode())
-            raise Exception("Error compiling vertex shader")
-        error = glGetShaderInfoLog(gl_fshader)
-        if error:
-            print(error.decode())
-            raise Exception("Error compiling fragment shader")
-
-        programObject = glCreateProgram()
-
-        glAttachShader(programObject, gl_vshader)
-        glAttachShader(programObject, gl_fshader)
-
-        glLinkProgram(programObject)
-
-        error = glGetProgramInfoLog(programObject)
-        if error:
-            print(error.decode())
-            raise Exception("Error linking program")
-
-
-        if not glGetProgramiv(programObject, GL_LINK_STATUS):
-            raise Exception("Error linking")
-        glUseProgram(programObject)
+        loc = glGetUniformLocation(program, b"fill")
+        if loc != -1:
+            print("loc", loc)
+            self.cache["shaderVarFill"] = loc
+        else:
+            raise Exception("Shader variable not found")
         # endregion
-
+        pass
 
 
     # region Drawing
@@ -227,14 +244,17 @@ class Histograph():
         if self.cache["scrollx"]:
             glTranslatef(self.cache["scrollx"] / self.itemWidth * (1/w),0,0) # scroll alignment
 
+        glUseProgram(self.cache["shaderProgram"])
         for section in self.sections:
             assert isinstance(section, Section)
 
             # Fill
             if not getKey("1"):
+                glUniform1f(self.cache["shaderVarFill"], True)
                 glColor(*section.line_fill_color)
                 glBindBuffer(GL_ARRAY_BUFFER, section.cache["vbo_l"])
                 glVertexPointer(2, GL_FLOAT, 0, None)
+
                 glPushMatrix()
                 glScalef(-2/w, 2*(h-1)/h, 1)
                 glTranslatef(-w/60, -1/2, 1)
@@ -243,9 +263,11 @@ class Histograph():
 
             # Lines
             if not getKey("2"):
+                glUniform1f(self.cache["shaderVarFill"], False)
                 glColor(*section.line_color)
                 glBindBuffer(GL_ARRAY_BUFFER, section.cache["vbo_l"])
                 glVertexPointer(2, GL_FLOAT, sizeof(c_float)*4, None)
+
                 glPushMatrix()
                 glScalef(-2/w, 2*(h-1)/h, 1)
                 glTranslatef(-w/60, -1/2, 1)
@@ -257,6 +279,7 @@ class Histograph():
         glPopMatrix()
 
     def _drawBorder(self):
+        glUseProgram(0)
         borderWidth = self.borderWidth
         if borderWidth > 1:
             borderWidth *= 2 # lines do not connect right, so I double the width and apply no glTranslate
@@ -305,20 +328,16 @@ class Histograph():
     def updateSection(self, section:Section):
         coords = []
         # region Generating coordinates
-        x = 0
         for item in section.values:
-            if x >= self.drawCount:
-                break
             assert isinstance(item, Item)
 
             #calc y
             y = ((item.value-section.min)/(section.max-section.min))
 
             # line_strip & quad_strip
-            coords.extend((x,y,x,0))
+            coords.extend((1,y,0,0)) # x1 means line, x0 means quad
 
             # increment, I'm using glScale in draw for itemWidth
-            x += 1
         # endregion
 
         # region Generating Vertex Buffer Object(VBO)
