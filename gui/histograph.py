@@ -263,7 +263,7 @@ class Histograph():
         glScalef(self.itemWidth,1,1) # scale x for item distances
 
         if self.cache["scrollx"]:
-            glTranslatef(self.cache["scrollx"] / self.itemWidth * (1/w),0,0) # scroll alignment
+            glTranslatef(self.cache["scrollx"] * 2 / self.itemWidth * (1/w),0,0) # scroll alignment
         else:
             glTranslatef(self.cache["item_index"] * (1/w) * 2,0,0) # new item alignment
 
@@ -416,7 +416,26 @@ class Histograph():
             self.cache["motion_last_x"] = x
 
         m = x-mlx
-        self.cache["scrollx"] += m*2
+
+        scrollx = self.cache["scrollx"] + m
+
+        sectionMax = 0
+        for section in self.sections:
+            sectionMax = max(sectionMax, len(section.values))
+
+        if scrollx < 0:
+            scrollx = 0
+
+        size = self.itemWidth * sectionMax
+        if scrollx:
+            end =  size - self.width - self.itemWidth
+            if size > self.width and scrollx > end:
+                print("max")
+                scrollx = end
+            elif size < self.width:
+                scrollx = 0
+
+        self.cache["scrollx"] = scrollx
         glutPostRedisplay()
 
     # region Callbacks
