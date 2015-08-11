@@ -6,7 +6,7 @@ import sys, os, ctypes as ct
 from time import clock, sleep
 from os import path
 
-import OpenGL
+import OpenGL.GL as gl
 from OpenGL.GL import *
 from OpenGL.GLUT import *
 from OpenGL.GLU import *
@@ -88,6 +88,16 @@ def getShaderProgram(vertex, fragment):
         raise Exception("Error linking program")
     return glp, gls_v, gls_f
 
+def getShaderVariableLoc(program, varname):
+    if isinstance(varname, str):
+        varname = varname.encode()
+    loc = glGetUniformLocation(program, varname)
+    if loc != -1:
+        print("loc", loc)
+        return loc
+    else:
+        raise Exception("Shader variable not found", program=program, varname=varname)
+
 
 keys = {}
 def getKey(key):
@@ -153,7 +163,20 @@ class Histograph():
         self.sections = [] # needed for order
         self.sections_d = {} # needed for speed
         self.drawCount = 999999
-        self.insert = True #
+
+        # sizeof(float) * vertexPerItem * len([x,y])
+        # 4 * 2 * 2 = 16
+        self.convItemByte = 16
+        self.convItemCoord = 4
+        self.convItemVert = 2
+
+
+        self.emptyItems = 32 # resize VBO that can hold 32 new items
+        self.replaceOldItems = True
+
+        # if treplaceOldItems: start replacing after count goes above this
+        self.minItemCount = 30
+
         self.cache = {
             #TODO :vao: use this for drawing sections, must have updates after adding/removing sections
             "vao": None,
@@ -161,10 +184,13 @@ class Histograph():
 
             "shaderProgram":None,
             "shaderVarFill":None,
+            "shaderVarSkip":None,
 
             "item_index": 0,
             "vertex_index": 0,
             "line_index":0,
+
+            "vbo_inslen":0,
 
             "scrollx":0,
             "motion_last_x":0,
@@ -198,12 +224,9 @@ class Histograph():
         program = getShaderProgram(vertex, fragment)[0]
         self.cache["shaderProgram"] = program
 
-        loc = glGetUniformLocation(program, b"fill")
-        if loc != -1:
-            print("loc", loc)
-            self.cache["shaderVarFill"] = loc
-        else:
-            raise Exception("Shader variable not found")
+        self.cache["shaderVarFill"] = getShaderVariableLoc(program, b"fill")
+        self.cache["shaderVarSkip"] = getShaderVariableLoc(program, b"skip")
+
         # endregion
         pass
 
@@ -239,15 +262,15 @@ class Histograph():
 
         glScalef(self.itemWidth,1,1) # scale x for item distances
 
-        if not self.cache["scrollx"]:
-            glTranslatef(self.cache["item_index"] * (1/w),0,0) # new item alignment
         if self.cache["scrollx"]:
             glTranslatef(self.cache["scrollx"] / self.itemWidth * (1/w),0,0) # scroll alignment
+        else:
+            glTranslatef(self.cache["item_index"] * (1/w) * 2,0,0) # new item alignment
 
         glUseProgram(self.cache["shaderProgram"])
+        glUniform1i(self.cache["shaderVarSkip"], self.cache["vbo_inslen"])
         for section in self.sections:
             assert isinstance(section, Section)
-
             # Fill
             if not getKey("1"):
                 glUniform1f(self.cache["shaderVarFill"], True)
@@ -258,7 +281,7 @@ class Histograph():
                 glPushMatrix()
                 glScalef(-2/w, 2*(h-1)/h, 1)
                 glTranslatef(-w/60, -1/2, 1)
-                glDrawArrays(GL_QUAD_STRIP, 0, len(section.values)*2)
+                glDrawArrays(GL_QUAD_STRIP, self.cache["vbo_inslen"]*2, len(section.values)*2)
                 glPopMatrix()
 
             # Lines
@@ -271,7 +294,7 @@ class Histograph():
                 glPushMatrix()
                 glScalef(-2/w, 2*(h-1)/h, 1)
                 glTranslatef(-w/60, -1/2, 1)
-                glDrawArrays(GL_LINE_STRIP, 0, len(section.values))
+                glDrawArrays(GL_LINE_STRIP, self.cache["vbo_inslen"], len(section.values))
                 glPopMatrix()
 
 
@@ -306,14 +329,32 @@ class Histograph():
         self.sections.append(section)
         self.sections_d[section.name] = section
 
-    def insertValue(self, section:Section, value:Item):
+    def insertValue(self, section:Section, item:Item):
+        self.replaceOldItems = getKey("b")
+
         if isinstance(section, str):
             section = self.sections_d[section]
-        assert isinstance(value, Item)
-        section.values.append(value)
+        assert isinstance(item, Item)
+
+        self.updateVBOSize(section) # must update before append
+
+        section.values.append(item)
+        if self.replaceOldItems and len(section.values) > self.minItemCount:
+            section.values.pop(0)
+
+        y = (item.value-section.min)/(section.max-section.min)
+        coords = [1,y,0,0]
+
+        data = getVBOData(coords)
+
 
         glBindBuffer(GL_ARRAY_BUFFER, section.cache["vbo_l"])
-        #
+        glBufferSubData(GL_ARRAY_BUFFER, (self.cache["vbo_inslen"]-1)*self.convItemByte, data)
+
+        self.cache["vbo_inslen"] -= 1
+
+
+        glutPostRedisplay()
 
 
     def update(self):
@@ -328,24 +369,43 @@ class Histograph():
     def updateSection(self, section:Section):
         coords = []
         # region Generating coordinates
-        for item in section.values:
+        for item in reversed(section.values):
             assert isinstance(item, Item)
 
             #calc y
-            y = ((item.value-section.min)/(section.max-section.min))
+            y = (item.value-section.min)/(section.max-section.min)
 
             # line_strip & quad_strip
+            # can decrease from 4 to 2 using a geometry shader but it will limit gl to min 3.2
             coords.extend((1,y,0,0)) # x1 means line, x0 means quad
-
-            # increment, I'm using glScale in draw for itemWidth
         # endregion
 
         # region Generating Vertex Buffer Object(VBO)
-        ending = [coords[0], coords[1], coords[0], 0] # used to connect first and last because it's a strip
-        data = getVBOData(coords + ending)
+        data = getVBOData(coords)
         glBindBuffer(GL_ARRAY_BUFFER, section.cache["vbo_l"])
         glBufferData(GL_ARRAY_BUFFER, data, GL_DYNAMIC_DRAW)
+        self.cache["vbo_inslen"] = 0
         # endregion
+
+    def updateVBOSize(self, section:Section):
+        if self.cache["vbo_inslen"] >= 1:
+            return
+        newVBO = glGenBuffers(1)
+
+        glBindBuffer(GL_COPY_READ_BUFFER_BINDING, section.cache["vbo_l"])
+        glBindBuffer(GL_COPY_WRITE_BUFFER_BINDING, newVBO)
+
+        emptyBytes = self.emptyItems * self.convItemByte
+        itemBytes = len(section.values) * self.convItemByte # item count is being incremented
+
+        glBufferData(GL_COPY_WRITE_BUFFER_BINDING,
+                     emptyBytes + itemBytes, None, GL_DYNAMIC_DRAW)
+        glCopyBufferSubData(GL_COPY_READ_BUFFER_BINDING, GL_COPY_WRITE_BUFFER_BINDING,
+                            0, emptyBytes, itemBytes)
+        glDeleteBuffers(1, [section.cache["vbo_l"]])
+
+        section.cache["vbo_l"] = newVBO
+        self.cache["vbo_inslen"] = self.emptyItems
 
     def updateMotion(self, x, press=False):
         if press:
@@ -358,6 +418,22 @@ class Histograph():
         m = x-mlx
         self.cache["scrollx"] += m*2
         glutPostRedisplay()
+
+    # region Callbacks
+    def callbackScroll(self, tillStart, tillEnd):
+        """
+        Will probably remove this
+        If scrolling is near start or scrolling is near end:
+            change the sections values and update or leave it be,
+            scrolling will stop at start/end
+
+        :param tillStart:
+        :param tillEnd:
+        :return: None
+        """
+        return
+
+    # endregion
 
 if __name__ == "__main__":
     print("Cannot run this module as __main_")
