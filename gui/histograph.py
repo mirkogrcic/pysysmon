@@ -16,6 +16,11 @@ try:import numpy as np
 except:np = None
 
 
+_shaderProgram = None
+_shaderVarFill = None
+_shaderVarSkip = None
+
+
 def setMatrix(l,r,b,t):
     """
 
@@ -93,10 +98,33 @@ def getShaderVariableLoc(program, varname):
         varname = varname.encode()
     loc = glGetUniformLocation(program, varname)
     if loc != -1:
-        print("loc", loc)
         return loc
     else:
         raise Exception("Shader variable not found", program=program, varname=varname)
+
+def init():
+    """
+    Initalize histograph requirements(shaders)
+    No need to call it, first initialized Histograph will call it
+    :return:
+    """
+    if _shaderProgram is not None:
+        return
+    global _shaderProgram, _shaderVarFill, _shaderVarSkip
+
+    path = os.path.dirname(__file__)
+    path = os.path.join(path, "shaders")
+
+    with open(os.path.join(path, "vertex.glsl")) as f:
+        vertex = f.read()
+    with open(os.path.join(path, "fragment.glsl")) as f:
+        fragment = f.read()
+
+    program = getShaderProgram(vertex, fragment)[0]
+
+    _shaderProgram = program
+    _shaderVarFill = getShaderVariableLoc(program, b"fill")
+    _shaderVarSkip = getShaderVariableLoc(program, b"skip")
 
 
 keys = {}
@@ -145,7 +173,7 @@ class Section():
         }
 
     def __del__(self):
-        glDeleteBuffers([self.cache["vbo_l"]])
+        glDeleteBuffers(1, [self.cache["vbo_l"]])
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.__del__()
@@ -184,21 +212,13 @@ class Histograph():
             "vao": None,
             "vbo_border": None,
 
-            "glSecLists": None,
-
-            "shaderProgram":None,
-            "shaderVarFill":None,
-            "shaderVarSkip":None,
-
             "vbo_inslen":0,
 
             "scrollx":0,
-            "motion_last_x":0,
+            "motion_last_x":None,
         }
 
     def init(self):
-        pass
-        #self.cache["vao"] = glGenVertexArrays(1) # init glut and window if exception
 
         # region Border Lines
         data = getVBOData([
@@ -212,23 +232,45 @@ class Histograph():
         glBufferData(GL_ARRAY_BUFFER, data, GL_STATIC_DRAW)
         # endregion
 
-        # region Vertex Shader, x increment
-        path = os.path.dirname(__file__)
-        path = os.path.join(path, "shaders")
-
-        with open(os.path.join(path, "vertex.glsl")) as f:
-            vertex = f.read()
-        with open(os.path.join(path, "fragment.glsl")) as f:
-            fragment = f.read()
-
-        program = getShaderProgram(vertex, fragment)[0]
-        self.cache["shaderProgram"] = program
-
-        self.cache["shaderVarFill"] = getShaderVariableLoc(program, b"fill")
-        self.cache["shaderVarSkip"] = getShaderVariableLoc(program, b"skip")
-
-        # endregion
+        init()
         pass
+
+    #def __repr__(self):
+        #return "%s %s %s %s" % self
+
+    # region Properties
+    @property
+    def x(self):
+        return self._x
+    @x.setter
+    def x(self,v):
+        if v >= 0:
+            self._x = int(v)
+
+    @property
+    def y(self):
+        return self._y
+    @y.setter
+    def y(self, v):
+        if v >= 0:
+            self._y = int(v)
+
+    @property
+    def width(self):
+        return self._width
+    @width.setter
+    def width(self, v):
+        if v >= 0:
+            self._width = int(v)
+
+    @property
+    def height(self):
+        return self._height
+    @height.setter
+    def height(self, v):
+        if v >= 0:
+            self._height = int(v)
+    # endregion
 
 
     # region Drawing
@@ -258,13 +300,13 @@ class Histograph():
         #if self.cache["scrollx"]:
         glTranslatef(-self.cache["scrollx"]/self.itemWidth ,0,0) # scroll alignment
 
-        glUseProgram(self.cache["shaderProgram"])
-        glUniform1i(self.cache["shaderVarSkip"], self.cache["vbo_inslen"])
+        glUseProgram(_shaderProgram)
+        glUniform1i(_shaderVarSkip, self.cache["vbo_inslen"])
         for section in self.sections:
             assert isinstance(section, Section)
             # Fill
             if self.fillLines:
-                glUniform1f(self.cache["shaderVarFill"], True)
+                glUniform1f(_shaderVarFill, True)
                 glColor(*section.line_fill_color)
                 glBindBuffer(GL_ARRAY_BUFFER, section.cache["vbo_l"])
                 glVertexPointer(2, GL_FLOAT, 0, None)
@@ -274,7 +316,7 @@ class Histograph():
                 glPopMatrix()
 
             # Lines
-            glUniform1f(self.cache["shaderVarFill"], False)
+            glUniform1f(_shaderVarFill, False)
             glColor(*section.line_color)
             glBindBuffer(GL_ARRAY_BUFFER, section.cache["vbo_l"])
             glVertexPointer(2, GL_FLOAT, sizeof(c_float)*4, None)
@@ -317,15 +359,30 @@ class Histograph():
         for section in self.sections:
             n = max(n, len(section.values))
         return n
-    # endregion<
+
+    def _isInside(self,x,y):
+        if x >= self.x and x - self.x < self.width and\
+            y >= self.y and y - self.y < self.height:
+            return True
+        return False
+    # endregion
 
     # region Scrolling
     def scrollToEnd(self):
         self.cache["scrollx"] = (self._getMaxValues()-1) * self.itemWidth - self.width
-        print("end")
 
     def scrollToStart(self):
         self.cache["scrollx"] = 0
+
+    def scrollToLeft(self, pixels):
+        self.cache["scrollx"] -= pixels
+        self.updateScrollBounds()
+        glutPostRedisplay()
+
+    def scrollToRight(self, pixels):
+        self.cache["scrollx"] += pixels
+        self.updateScrollBounds()
+        glutPostRedisplay()
     # endregion
 
     def addSection(self, section:Section):
@@ -434,41 +491,105 @@ class Histograph():
     # endregion
 
     # region Keyboard and mouse input
-    def inputKeyboard(self,key,x,y):
-        pass
+    # Need x,y input(all inputs) origin as Left,Lower
+    #   because viewport is Left,Lower based, but glut Left,Upper
+    def inputKeyboard(self,key:str,x,y):
+        """
 
-    def inputKeyboardSpecial(self,key,x,y):
+        :param key:
+        :param x: left
+        :param y: lower
+        :return:
+        """
+        if not self._isInside(x,y):
+            return
+
+    def inputKeyboardSpecial(self,key:int,x,y):
+        """
+
+        :param key:
+        :param x: left
+        :param y: lower
+        :return:
+        """
+        if not self._isInside(x,y):
+            return
         if key ==  GLUT_KEY_HOME:
             self.scrollToStart()
-            glutPostRedisplay()
+
         elif key == GLUT_KEY_END:
             self.scrollToEnd()
-            glutPostRedisplay()
 
-    def inputMouse(self, key, released, x,y):
-        if key == 0:
-            self.cache["motion_last_x"] = x
+        elif key == GLUT_KEY_UP:
+            self.itemWidth += 1
 
-    def inputMotionActive(self,x,y):
-        # region Scrollx
-        mlx = self.cache["motion_last_x"]
-        self.cache["motion_last_x"] = x
+        elif key == GLUT_KEY_DOWN:
+            if self.itemWidth >= 2:
+                self.itemWidth -= 1
 
-        m = x-mlx
-        self.cache["scrollx"] += m
+        elif key == GLUT_KEY_LEFT:
+            self.scrollToLeft(self.itemWidth)
 
-        self.updateScrollBounds()
-
-        # endregion
+        elif key == GLUT_KEY_RIGHT:
+            self.scrollToRight(self.itemWidth)
 
         glutPostRedisplay()
 
-    def inputMotionPassive(self,x,y):
-        pass
+    def inputMouse(self, key:int, pressed:bool, x,y):
+        """
 
-    def inputWheel(self, direction):
-        self.cache["scrollx"] += direction * self.itemWidth
-        self.updateScrollBounds()
+        :param key:
+        :param released:
+        :param x: left
+        :param y: lower
+        :return:
+        """
+        if self.cache["motion_last_x"] is not None and key == 0 and not pressed:
+            self.cache["motion_last_x"] = None
+        if not self._isInside(x,y):
+            return
+        if key == 0:
+            if pressed:
+                self.cache["motion_last_x"] = x
+            else:
+                self.cache["motion_last_x"] = None
+
+    def inputWheel(self, direction:int, x,y):
+        """
+
+        :param direction:
+        :param x: left
+        :param y: lower
+        :return:
+        """
+        if not self._isInside(x,y):
+            return
+        self.scrollToRight(direction * self.itemWidth)
+
+    def inputMotionActive(self,x,y):
+        """
+
+        :param x: left
+        :param y: lower
+        :return:
+        """
+        # region Scrollx
+        if self.cache["motion_last_x"] is not None:
+            mlx = self.cache["motion_last_x"]
+            self.cache["motion_last_x"] = x
+
+            m = x-mlx
+            self.scrollToRight(m)
+
+        # endregion
+        if not self._isInside(x,y):
+            return
+
+
+
+    def inputMotionPassive(self,x,y):
+        if not self._isInside(x,y):
+            return
 
     # endregion
 
