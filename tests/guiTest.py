@@ -52,7 +52,6 @@ def keyboard( key, x, y ):
         glutPostRedisplay()
     elif key == b"R":
         reshape(width, height)
-        graph.cache["scrollx"] = 0
         glLoadIdentity()
         glutPostRedisplay()
     elif key == b"+":
@@ -88,19 +87,26 @@ def keyboard( key, x, y ):
     else:
         k = key.decode()
         h.keys[k] = not h.keys.get(k,False)
-        print(h.keys[k])
+        print(k, h.keys[k])
         graph.update()
         glutPostRedisplay()
 
+def specialKey(key, x, y):
+    graph.inputKeyboardSpecial(key,x,y)
+
 def mouseKey(key, released, x,y):
-    if key == 0:
-        if not released:
-            graph.updateMotion(x, True)
+    graph.inputMouse(key, released, x, y)
+    if not released:
+        if key == 3: # UP
+            graph.inputWheel(1)
+        elif key == 4: # DOWN
+            graph.inputWheel(-1)
+
 
 
 
 def activeMotion(x,y):
-    graph.updateMotion(x)
+    graph.inputMotionActive(x,y)
 
 passive = {}
 for i in "x y % lval".split(" "): passive[i] = 0
@@ -122,7 +128,7 @@ def insertValue(a=0):
     #graph.insertValue("b", item)
 
     if a:
-        glutTimerFunc(1000, insertValue, 1)
+        glutTimerFunc(a, insertValue, a)
 
 
 width, height = 600,600
@@ -142,7 +148,8 @@ glutKeyboardFunc(keyboard)
 glutMotionFunc(activeMotion)
 glutPassiveMotionFunc(passiveMotion)
 glutMouseFunc(mouseKey)
-#glutTimerFunc(1000, insertValue, 0)
+glutSpecialFunc(specialKey)
+#glutTimerFunc(1, insertValue, 1000)
 
 random.seed(0)
 
@@ -164,5 +171,8 @@ for i in [50,50,0,0,50,50, 25]:
 
 
 graph.update()
+
+for i in range(500):
+    insertValue()
 
 glutMainLoop()

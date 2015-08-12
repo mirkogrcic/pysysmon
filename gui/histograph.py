@@ -174,6 +174,8 @@ class Histograph():
         self.emptyItems = 32 # resize VBO that can hold 32 new items
         self.replaceOldItems = True
 
+        self.fillLines = True
+
         # if treplaceOldItems: start replacing after count goes above this
         self.minItemCount = 30
 
@@ -182,13 +184,11 @@ class Histograph():
             "vao": None,
             "vbo_border": None,
 
+            "glSecLists": None,
+
             "shaderProgram":None,
             "shaderVarFill":None,
             "shaderVarSkip":None,
-
-            "item_index": 0,
-            "vertex_index": 0,
-            "line_index":0,
 
             "vbo_inslen":0,
 
@@ -233,6 +233,7 @@ class Histograph():
 
     # region Drawing
     def draw(self):
+        t = clock()
         x,y = self.x, self.y
         w,h = self.width, self.height
         b = self.borderWidth
@@ -242,9 +243,8 @@ class Histograph():
 
         glEnableClientState(GL_VERTEX_ARRAY)
 
-        # region Draw border
+
         self._drawBorder()
-        # endregion
 
 
         if w <= b or h <= b:
@@ -252,54 +252,40 @@ class Histograph():
         glViewport(x+b, y+b, w-b*2, h-b*2)
         glPushMatrix()
 
-        if getKey("p"):
-            keys["p"] = False
-            self.cache["item_index"] += 1
+        glScalef(-2/w*self.itemWidth, 2*(h-1)/h, 1) # xDistance, range(0-w)
+        glTranslatef(-w/2/self.itemWidth, -1/2, 1)
 
-        if getKey("m"):
-            keys["m"] = False
-            self.cache["item_index"] -= 1
-
-        glScalef(self.itemWidth,1,1) # scale x for item distances
-
-        if self.cache["scrollx"]:
-            glTranslatef(self.cache["scrollx"] * 2 / self.itemWidth * (1/w),0,0) # scroll alignment
-        else:
-            glTranslatef(self.cache["item_index"] * (1/w) * 2,0,0) # new item alignment
+        #if self.cache["scrollx"]:
+        glTranslatef(-self.cache["scrollx"]/self.itemWidth ,0,0) # scroll alignment
 
         glUseProgram(self.cache["shaderProgram"])
         glUniform1i(self.cache["shaderVarSkip"], self.cache["vbo_inslen"])
         for section in self.sections:
             assert isinstance(section, Section)
             # Fill
-            if not getKey("1"):
+            if self.fillLines:
                 glUniform1f(self.cache["shaderVarFill"], True)
                 glColor(*section.line_fill_color)
                 glBindBuffer(GL_ARRAY_BUFFER, section.cache["vbo_l"])
                 glVertexPointer(2, GL_FLOAT, 0, None)
 
                 glPushMatrix()
-                glScalef(-2/w, 2*(h-1)/h, 1)
-                glTranslatef(-w/60, -1/2, 1)
                 glDrawArrays(GL_QUAD_STRIP, self.cache["vbo_inslen"]*2, len(section.values)*2)
                 glPopMatrix()
 
             # Lines
-            if not getKey("2"):
-                glUniform1f(self.cache["shaderVarFill"], False)
-                glColor(*section.line_color)
-                glBindBuffer(GL_ARRAY_BUFFER, section.cache["vbo_l"])
-                glVertexPointer(2, GL_FLOAT, sizeof(c_float)*4, None)
+            glUniform1f(self.cache["shaderVarFill"], False)
+            glColor(*section.line_color)
+            glBindBuffer(GL_ARRAY_BUFFER, section.cache["vbo_l"])
+            glVertexPointer(2, GL_FLOAT, sizeof(c_float)*4, None)
 
-                glPushMatrix()
-                glScalef(-2/w, 2*(h-1)/h, 1)
-                glTranslatef(-w/60, -1/2, 1)
-                glDrawArrays(GL_LINE_STRIP, self.cache["vbo_inslen"], len(section.values))
-                glPopMatrix()
-
+            glPushMatrix()
+            glDrawArrays(GL_LINE_STRIP, self.cache["vbo_inslen"], len(section.values))
+            glPopMatrix()
 
         glDisableClientState(GL_VERTEX_ARRAY)
         glPopMatrix()
+        #print("draw time", (clock()-t)/1000)
 
     def _drawBorder(self):
         glUseProgram(0)
@@ -323,6 +309,23 @@ class Histograph():
 
         glLineWidth(1)
 
+    # endregion
+
+    # region Helpers
+    def _getMaxValues(self):
+        n = 0
+        for section in self.sections:
+            n = max(n, len(section.values))
+        return n
+    # endregion<
+
+    # region Scrolling
+    def scrollToEnd(self):
+        self.cache["scrollx"] = (self._getMaxValues()-1) * self.itemWidth - self.width
+        print("end")
+
+    def scrollToStart(self):
+        self.cache["scrollx"] = 0
     # endregion
 
     def addSection(self, section:Section):
@@ -352,11 +355,14 @@ class Histograph():
         glBufferSubData(GL_ARRAY_BUFFER, (self.cache["vbo_inslen"]-1)*self.convItemByte, data)
 
         self.cache["vbo_inslen"] -= 1
+        if self.cache["scrollx"]:
+            self.cache["scrollx"] += self.itemWidth # do not move, for inspection
+            self.updateScrollBounds()
 
 
         glutPostRedisplay()
 
-
+    # region Updates
     def update(self):
         """
         Call if you changed any of the folowing attributes
@@ -407,21 +413,10 @@ class Histograph():
         section.cache["vbo_l"] = newVBO
         self.cache["vbo_inslen"] = self.emptyItems
 
-    def updateMotion(self, x, press=False):
-        if press:
-            self.cache["motion_last_x"] = x
-            return
-        else:
-            mlx = self.cache["motion_last_x"]
-            self.cache["motion_last_x"] = x
+    def updateScrollBounds(self):
+        scrollx = self.cache["scrollx"]
 
-        m = x-mlx
-
-        scrollx = self.cache["scrollx"] + m
-
-        sectionMax = 0
-        for section in self.sections:
-            sectionMax = max(sectionMax, len(section.values))
+        sectionMax = self._getMaxValues()
 
         if scrollx < 0:
             scrollx = 0
@@ -430,13 +425,52 @@ class Histograph():
         if scrollx:
             end =  size - self.width - self.itemWidth
             if size > self.width and scrollx > end:
-                print("max")
                 scrollx = end
             elif size < self.width:
                 scrollx = 0
 
         self.cache["scrollx"] = scrollx
+
+    # endregion
+
+    # region Keyboard and mouse input
+    def inputKeyboard(self,key,x,y):
+        pass
+
+    def inputKeyboardSpecial(self,key,x,y):
+        if key ==  GLUT_KEY_HOME:
+            self.scrollToStart()
+            glutPostRedisplay()
+        elif key == GLUT_KEY_END:
+            self.scrollToEnd()
+            glutPostRedisplay()
+
+    def inputMouse(self, key, released, x,y):
+        if key == 0:
+            self.cache["motion_last_x"] = x
+
+    def inputMotionActive(self,x,y):
+        # region Scrollx
+        mlx = self.cache["motion_last_x"]
+        self.cache["motion_last_x"] = x
+
+        m = x-mlx
+        self.cache["scrollx"] += m
+
+        self.updateScrollBounds()
+
+        # endregion
+
         glutPostRedisplay()
+
+    def inputMotionPassive(self,x,y):
+        pass
+
+    def inputWheel(self, direction):
+        self.cache["scrollx"] += direction * self.itemWidth
+        self.updateScrollBounds()
+
+    # endregion
 
     # region Callbacks
     def callbackScroll(self, tillStart, tillEnd):
@@ -453,6 +487,7 @@ class Histograph():
         return
 
     # endregion
+    pass
 
 if __name__ == "__main__":
     print("Cannot run this module as __main_")

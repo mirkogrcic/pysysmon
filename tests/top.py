@@ -24,6 +24,8 @@ def get_info():
 """def print(*args, **kwargs):
     return"""
 
+last_cpu_u, last_procs = get_info()
+
 while True:
     sleep(1)
     print("\n"*5)
