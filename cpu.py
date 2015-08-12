@@ -1,7 +1,7 @@
 __author__ = 'mirko'
 import re, os
 
-
+#TODO add __slots__
 
 class CPUTime:
     def __init__(self, user, userLow, sys, idle):
