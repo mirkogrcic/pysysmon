@@ -26,7 +26,7 @@ def display():
     glColor3f(0,0,0)
     glTranslatef(-1, 0.94, 1)
     glScalef(0.0005, 0.0005, 1)
-    glutStrokeString(GLUT_STROKE_ROMAN, "{x}x{y} {%}% {lval}".format(**passive).encode())
+    glutStrokeString(GLUT_STROKE_ROMAN, "{x}x{y} {%}% last:{lval} i{itemIndex} v{itemValues}".format(**passive).encode())
     #glutStrokeString(GLUT_STROKE_ROMAN, b"aaaaAAAAAAAAAAAAAAA\nAAA")
     glPopMatrix()
 
@@ -119,15 +119,22 @@ def activeMotion(x,y):
 
 
 passive = {}
-for i in "x y % lval".split(" "): passive[i] = 0
+for i in "x y % lval itemIndex itemValues".split(" "): passive[i] = 0
 def passiveMotion(x,y):
     y = height - y
     global passive
     passive["x"] = graph.width - x
     passive["y"] = y
     passive["%"] = round(y/graph.height*100, 1)
+    graph.inputMotionPassive(x,y)
     glutPostRedisplay()
 
+def graphHoverItem(graph, index, items,  *args):
+    global passive
+    passive["itemIndex"] = index
+
+    values = [str(i.value) for i in items]
+    passive["itemValues"] = "[%s]"%",".join(values)
 
 def insertValue(a=0):
     item = h.Item(random.randint(0, 100), 0)
@@ -160,13 +167,14 @@ glutMotionFunc(activeMotion)
 glutPassiveMotionFunc(passiveMotion)
 glutMouseFunc(mouseKey)
 glutSpecialFunc(specialKey)
-glutTimerFunc(1, insertValue, 1000)
+#glutTimerFunc(1, insertValue, 1000)
 
 random.seed(0)
 
 graph = h.Histograph(0,0,width, height)
 graph.init()
 graph.itemWidth = 30
+graph.callbackHoverItem = graphHoverItem
 
 
 section = h.Section("a", (0,.5,0), (0,1,0))

@@ -132,7 +132,7 @@ def getKey(key):
     return keys.get(key, False)
 
 class Item():
-    __slots__ = ("value", "time") # increases performance
+    __slots__ = ("value", "time", "data") # increases performance
     def __init__(self, value, time):
         """
 
@@ -142,6 +142,7 @@ class Item():
         """
         self.value = value
         self.time = time
+        self.data = []
 
     def __repr__(self):
         return str(self.value)
@@ -365,6 +366,31 @@ class Histograph():
             y >= self.y and y - self.y < self.height:
             return True
         return False
+
+    def _getItems(self, x):
+        """
+
+        :param x:
+        :return: index, items, sections_d{sectName:item}
+        """
+        index = self.width - (x - self.x) # from right to left(left origin to right origin)
+        index += self.cache["scrollx"]
+        index /= self.itemWidth
+
+        items = []
+        sections_d = {}
+
+        for sec in self.sections:
+            assert isinstance(sec, Section)
+            if index < 0 or index >= len(sec.values):
+                continue
+            item = sec.values[-(round(index)+1)]
+            items.append(item)
+            sections_d[sec.name] = item
+        if items:
+            return round(index), items, sections_d
+        return None
+
     # endregion
 
     # region Scrolling
@@ -585,11 +611,12 @@ class Histograph():
         if not self._isInside(x,y):
             return
 
-
-
     def inputMotionPassive(self,x,y):
         if not self._isInside(x,y):
             return
+        params = self._getItems(x)
+        if params:
+            self.callbackHoverItem(self, *params)
 
     # endregion
 
@@ -607,6 +634,16 @@ class Histograph():
         """
         return
 
+    def callbackHoverItem(self, graph, index:int, items:list, section_d:dict):
+        """
+
+        :param graph: graph where the hover occurred
+        :param index:
+        :param items: [item(section0), item(section1)...]
+        :param section_d: {section0:item, section1:item}
+        :return:
+        """
+        return
     # endregion
     pass
 

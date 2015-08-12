@@ -28,7 +28,7 @@ def display():
     glColor3f(0,0,0)
     glTranslatef(-1, 0.94, 1)
     glScalef(0.0005, 0.0005, 1)
-    glutStrokeString(GLUT_STROKE_ROMAN, "{x}x{y} {%}% {lval}".format(**passive).encode())
+    glutStrokeString(GLUT_STROKE_ROMAN, "{x}x{y} {%}% last:{lval} i{itemIndex} v{itemValues}".format(**passive).encode())
     #glutStrokeString(GLUT_STROKE_ROMAN, b"aaaaAAAAAAAAAAAAAAA\nAAA")
     glPopMatrix()
 
@@ -124,10 +124,12 @@ def activeMotion(x,y):
 
 
 passive = {}
-for i in "x y % lval".split(" "): passive[i] = 0
+for i in "x y % lval itemIndex itemValues".split(" "): passive[i] = 0
 def passiveMotion(x,y):
+    y = height - y
     global passive
     for graph in graphs:
+        graph.inputMotionPassive(x,y)
         if not graph._isInside(x,y):
             continue
         ww = graph.x + graph.width
@@ -137,6 +139,13 @@ def passiveMotion(x,y):
         passive["%"] = round(100-(y - graph.y)/graph.height*100, 1)
         break
     glutPostRedisplay()
+
+def graphHoverItem(graph, index, items,  *args):
+    global passive
+    passive["itemIndex"] = index
+
+    values = [str(i.value) for i in items]
+    passive["itemValues"] = "[%s]"%",".join(values)
 
 
 def insertValue(a=0):
@@ -152,6 +161,7 @@ def insertValue(a=0):
 
     if a:
         glutTimerFunc(a, insertValue, a)
+
 
 
 width, height = 600,600
@@ -190,7 +200,8 @@ for y in range(graphPerD):
         random.seed(0)
         graph = h.Histograph(x*xw,y*yw,xw, yw)
         graph.init()
-        graph.itemWidth = 3
+        graph.itemWidth = 30
+        graph.callbackHoverItem = graphHoverItem
 
 
         section = h.Section("a", (0,.5,0), (0,1,0))
