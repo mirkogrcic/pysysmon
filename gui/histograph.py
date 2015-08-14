@@ -17,9 +17,10 @@ except:np = None
 
 
 _shaderProgram = None
+
 _shaderVarFill = None
 _shaderVarSkip = None
-
+_shaderVarHighlight = None
 
 def setMatrix(l,r,b,t):
     """
@@ -100,7 +101,7 @@ def getShaderVariableLoc(program, varname):
     if loc != -1:
         return loc
     else:
-        raise Exception("Shader variable not found", program=program, varname=varname)
+        raise Exception("Shader variable not found", program, varname)
 
 def init():
     """
@@ -111,6 +112,7 @@ def init():
     if _shaderProgram is not None:
         return
     global _shaderProgram, _shaderVarFill, _shaderVarSkip
+    global _shaderVarHighlight
 
     path = os.path.dirname(__file__)
     path = os.path.join(path, "shaders")
@@ -125,6 +127,7 @@ def init():
     _shaderProgram = program
     _shaderVarFill = getShaderVariableLoc(program, b"fill")
     _shaderVarSkip = getShaderVariableLoc(program, b"skip")
+    _shaderVarHighlight = getShaderVariableLoc(program, b"highlight")
 
 
 keys = {}
@@ -181,13 +184,14 @@ class Section():
         raise exc_type(exc_val, traceback=exc_tb)
 
 class Histograph():
+    _borderWidth = 1
+
     #__slots__ = []
     def __init__(self, x, y, width, height):
         self.x = x
         self.y = y
         self.width = width
         self.height = height
-        self.borderWidth = 1
         self.itemWidth = 3
         self.sections = [] # needed for order
         self.sections_d = {} # needed for speed
@@ -204,19 +208,20 @@ class Histograph():
         self.replaceOldItems = True
 
         self.fillLines = True
+        self.highlightHover = True
 
         # if treplaceOldItems: start replacing after count goes above this
         self.minItemCount = 30
 
         self.cache = {
-            #TODO :vao: use this for drawing sections, must have updates after adding/removing sections
-            "vao": None,
             "vbo_border": None,
 
             "vbo_inslen":0,
 
             "scrollx":0,
             "motion_last_x":None,
+
+            "hoverIndex": None,
         }
 
     def init(self):
@@ -263,6 +268,7 @@ class Histograph():
     def width(self, v):
         if v >= 0:
             self._width = int(v)
+            self._iwidth = int(v - self.borderWidth*2)
 
     @property
     def height(self):
@@ -271,15 +277,25 @@ class Histograph():
     def height(self, v):
         if v >= 0:
             self._height = int(v)
+            self._iheight = int(v - self.borderWidth*2)
+
+    @property
+    def borderWidth(self):
+        return self._borderWidth
+    @borderWidth.setter
+    def borderWidth(self, v):
+        self._borderWidth = v
+        self.width = self.width
+        self.height = self.height
     # endregion
 
 
     # region Drawing
     def draw(self):
         t = clock()
-        x,y = self.x, self.y
-        w,h = self.width, self.height
-        b = self.borderWidth
+        x,y = self.x+self.borderWidth, self.y+self.borderWidth
+        w,h = self._iwidth, self._iheight
+
         # default matrix l,r,b,t = -1,1,-1,1
 
         glClearColor(.8,.8,.8,0)
@@ -290,9 +306,9 @@ class Histograph():
         self._drawBorder()
 
 
-        if w <= b or h <= b:
+        if w < 1 or h < 1:
             return
-        glViewport(x+b, y+b, w-b*2, h-b*2)
+        glViewport(x, y, w, h)
         glPushMatrix()
 
         glScalef(-2/w*self.itemWidth, 2*(h-1)/h, 1) # xDistance, range(0-w)
@@ -303,12 +319,21 @@ class Histograph():
 
         glUseProgram(_shaderProgram)
         glUniform1i(_shaderVarSkip, self.cache["vbo_inslen"])
+
+        # region Highlight
+        if self.highlightHover and self.cache["hoverIndex"] is not None:
+            glUniform1i(_shaderVarHighlight, self.cache["hoverIndex"])
+        else:
+            glUniform1i(_shaderVarHighlight, -1)
+
+        # endregion
+
         for section in self.sections:
             assert isinstance(section, Section)
             # Fill
             if self.fillLines:
                 glUniform1f(_shaderVarFill, True)
-                glColor(*section.line_fill_color)
+                glColor4f(*section.line_fill_color)
                 glBindBuffer(GL_ARRAY_BUFFER, section.cache["vbo_l"])
                 glVertexPointer(2, GL_FLOAT, 0, None)
 
@@ -318,7 +343,7 @@ class Histograph():
 
             # Lines
             glUniform1f(_shaderVarFill, False)
-            glColor(*section.line_color)
+            glColor4f(*section.line_color)
             glBindBuffer(GL_ARRAY_BUFFER, section.cache["vbo_l"])
             glVertexPointer(2, GL_FLOAT, sizeof(c_float)*4, None)
 
@@ -340,6 +365,8 @@ class Histograph():
         x,y = self.x, self.y
         w,h = self.width, self.height
 
+        if w < 1 or h < 1:
+            return
 
         glViewport(x,y, w,h)
         glBindBuffer(GL_ARRAY_BUFFER, self.cache["vbo_border"])
@@ -367,15 +394,23 @@ class Histograph():
             return True
         return False
 
+    def _getIndex(self, x, decimal=False):
+        # change origin from right to left
+        width = self._iwidth
+        index = width - x
+        index += self.cache["scrollx"] # account for scrolling
+        index /= self.itemWidth # get item index
+        if decimal:
+            return index
+        return round(index)
+
     def _getItems(self, x):
         """
 
         :param x:
         :return: index, items, sections_d{sectName:item}
         """
-        index = self.width - (x - self.x) # from right to left(left origin to right origin)
-        index += self.cache["scrollx"]
-        index /= self.itemWidth
+        index = self._getIndex(x)
 
         items = []
         sections_d = {}
@@ -384,18 +419,59 @@ class Histograph():
             assert isinstance(sec, Section)
             if index < 0 or index >= len(sec.values):
                 continue
-            item = sec.values[-(round(index)+1)]
+            item = sec.values[-(index+1)]
             items.append(item)
             sections_d[sec.name] = item
         if items:
-            return round(index), items, sections_d
+            return index, items, sections_d
         return None
+
+
+
+    def _getPeekWinLoc(self, section:Section, index):
+        try:
+            item = section.values[-(index+1)]
+        except IndexError:
+            return None
+
+        x = (index * self.itemWidth) - self.cache["scrollx"]
+
+        #y = self.height - self.borderWidth*2
+        #print(y)
+        y = (item.value-section.min)/(section.max-section.min)*self._iheight
+        x = self._iwidth - x
+        x,y = self._getOuterCoord(x,y)
+        return x,y,0,0
+
+    def _getInnerCoord(self, x,y):
+        """
+        Translate wndow coordinates originating at lower left
+        to inner graph coordinates
+        :param x:
+        :param y:
+        :return:
+        """
+        rx = x - self.x - self.borderWidth
+        ry = y - self.y - self.borderWidth
+        return rx,ry
+
+    def _getOuterCoord(self, x,y):
+        """
+        Translate wndow coordinates originating at lower left
+        to inner graph coordinates
+        :param x:
+        :param y:
+        :return:
+        """
+        rx = x + self.x + self.borderWidth
+        ry = y + self.y + self.borderWidth
+        return rx,ry
 
     # endregion
 
     # region Scrolling
     def scrollToEnd(self):
-        self.cache["scrollx"] = (self._getMaxValues()-1) * self.itemWidth - self.width
+        self.cache["scrollx"] = (self._getMaxValues()-1) * self.itemWidth - self._iwidth
 
     def scrollToStart(self):
         self.cache["scrollx"] = 0
@@ -504,12 +580,13 @@ class Histograph():
         if scrollx < 0:
             scrollx = 0
 
+        w = self._iwidth
         size = self.itemWidth * sectionMax
         if scrollx:
-            end =  size - self.width - self.itemWidth
-            if size > self.width and scrollx > end:
+            end =  size - w - self.itemWidth
+            if size > w and scrollx > end:
                 scrollx = end
-            elif size < self.width:
+            elif size < w:
                 scrollx = 0
 
         self.cache["scrollx"] = scrollx
@@ -529,6 +606,12 @@ class Histograph():
         """
         if not self._isInside(x,y):
             return
+        x,y = self._getInnerCoord(x,y)
+        if key == "p":
+            self.borderWidth += 1
+        elif key == "m":
+            self.borderWidth = max(1, self.borderWidth - 1)
+        glutPostRedisplay()
 
     def inputKeyboardSpecial(self,key:int,x,y):
         """
@@ -540,6 +623,7 @@ class Histograph():
         """
         if not self._isInside(x,y):
             return
+        x,y = self._getInnerCoord(x,y)
         if key ==  GLUT_KEY_HOME:
             self.scrollToStart()
 
@@ -579,6 +663,7 @@ class Histograph():
                 self.cache["motion_last_x"] = x
             else:
                 self.cache["motion_last_x"] = None
+        #x,y = self._getInnerCoord(x,y)
 
     def inputWheel(self, direction:int, x,y):
         """
@@ -590,6 +675,7 @@ class Histograph():
         """
         if not self._isInside(x,y):
             return
+        #x,y = self._getInnerCoord(x,y)
         self.scrollToRight(direction * self.itemWidth)
 
     def inputMotionActive(self,x,y):
@@ -610,13 +696,17 @@ class Histograph():
         # endregion
         if not self._isInside(x,y):
             return
+        #x,y = self._getInnerCoord(x,y)
 
     def inputMotionPassive(self,x,y):
         if not self._isInside(x,y):
+            self.cache["hoverIndex"] = None
             return
+        x,y = self._getInnerCoord(x,y)
         params = self._getItems(x)
         if params:
             self.callbackHoverItem(self, *params)
+        self.cache["hoverIndex"] = params[0]
 
     # endregion
 
@@ -648,4 +738,4 @@ class Histograph():
     pass
 
 if __name__ == "__main__":
-    print("Cannot run this module as __main_")
+    print("Cannot run this module as __main__")

@@ -96,6 +96,8 @@ def keyboard( key, x, y ):
         print(k, h.keys[k])
         graph.update()
         glutPostRedisplay()
+    key = key.decode()
+    graph.inputKeyboard(key, x,y)
 
 def specialKey(key, x, y):
     y = height - y
@@ -123,7 +125,7 @@ for i in "x y % lval itemIndex itemValues".split(" "): passive[i] = 0
 def passiveMotion(x,y):
     y = height - y
     global passive
-    passive["x"] = graph.width - x
+    passive["x"] = "%s:%s"%(graph.width - x, x)
     passive["y"] = y
     passive["%"] = round(y/graph.height*100, 1)
     graph.inputMotionPassive(x,y)
@@ -177,13 +179,13 @@ graph.itemWidth = 30
 graph.callbackHoverItem = graphHoverItem
 
 
-section = h.Section("a", (0,.5,0), (0,1,0))
+section = h.Section("a", (0,.5,0,1), (0,1,0,1))
 for i in [100,100,75,75,100,100, 85,80,70,80,65,87,80,80]:
     section.values.append(h.Item(i, 0))
 graph.addSection(section)
 
 
-section = h.Section("b", (.5,0,0), (1,0,0))
+section = h.Section("b", (.5,0,0,1), (1,0,0,1))
 for i in [50,50,0,0,50,50, 25]:
     section.values.append(h.Item(i, 0))
 #graph.addSection(section)

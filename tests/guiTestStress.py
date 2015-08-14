@@ -98,6 +98,9 @@ def keyboard( key, x, y ):
         h.keys[k] = not h.keys.get(k,False)
         print(k, h.keys[k])
         glutPostRedisplay()
+    key = key.decode()
+    for graph in graphs:
+        graph.inputKeyboard(key, x,y)
 
 def specialKey(key, x, y):
     y = height - y
@@ -204,13 +207,13 @@ for y in range(graphPerD):
         graph.callbackHoverItem = graphHoverItem
 
 
-        section = h.Section("a", (0,.5,0), (0,1,0))
+        section = h.Section("a", (0,.5,0,1), (0,1,0,1))
         for i in values:
             section.values.append(h.Item(i, 0))
         graph.addSection(section)
 
 
-        section = h.Section("b", (.5,0,0), (1,0,0))
+        section = h.Section("b", (.5,0,0,1), (1,0,0,1))
         for i in [50,50,0,0,50,50, 25]:
             section.values.append(h.Item(i, 0))
         #graph.addSection(section)
